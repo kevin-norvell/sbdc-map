@@ -15,7 +15,13 @@ No API keys. No build step. Just `index.html` + `data.json` + `assets/`.
 - **Brand** — America's SBDC colors (`#d11242` red, `#022d61` navy, `#5588c6` blue)
   and the official logo. Lead/state offices are navy pins; service centers are red.
 - **Filter by state network** — dropdown of every state/territory with a live count.
-- **Search** — by center name or city.
+- **Search** — by center name or city, or a **5-digit ZIP code**: the map flies to
+  that ZIP (blue "you are here" marker) and lists the nearest service centers with
+  distances. ZIP→coordinates come from a bundled Census ZCTA centroid file
+  (`zip-centroids.json`), so it's keyless and instant; PO-box-only ZIPs fall back to
+  the 3-digit prefix area.
+- **Center types** — lead / service / outreach (circuit-rider). Outreach sites are
+  hidden by default behind a toggle; ZIP "nearest" results are service centers only.
 - **Popups** — center name, parent org, address, click-to-call phone, and website.
 - **Sidebar list** — synced to the current filter; click an entry to fly to its pin.
 
@@ -40,15 +46,26 @@ Pipeline (all scripts in `scripts/`):
    addresses, chunked batches with retry/backoff, and oneline + territory-centroid
    fallbacks. Pacific territories (GU, AS, VI, MP, PW, FM, MH) use island centroids
    because Census doesn't cover them. → `data/centers_geo.json`.
-4. **`build_data.py`** — slims placed records into the app's `data.json`.
+4. **`merge_enrich.py`** — merges per-state enrichment (`data/enrich/*.json`, the
+   satellite/circuit-rider offices not in the national directory) over the base set,
+   and classifies every record as lead/service/outreach (`classify.py`, shared with
+   the client). → `data/centers_merged.json`.
+5. **`build_data.py`** — slims placed records into the app's `data.json`.
 
 To refresh the data end-to-end:
 
 ```bash
-python3 scripts/harvest.py      # re-pull from America's SBDC
-python3 scripts/reparse.py      # parse + dedupe
-python3 scripts/geocode.py      # geocode (resumable; safe to re-run)
-python3 scripts/build_data.py   # emit data.json
+python3 scripts/harvest.py        # re-pull from America's SBDC
+python3 scripts/reparse.py        # parse + dedupe
+python3 scripts/merge_enrich.py   # merge per-state enrichment + classify types
+python3 scripts/geocode.py        # geocode (resumable; safe to re-run)
+python3 scripts/build_data.py     # emit data.json
+```
+
+The ZIP-search lookup is built once from the Census ZCTA gazetteer:
+
+```bash
+python3 scripts/build_zips.py     # emit zip-centroids.json
 ```
 
 Centers the Census geocoder can't resolve (PO boxes, suite-only addresses during

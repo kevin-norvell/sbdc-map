@@ -83,6 +83,10 @@
   .item h3{margin:0 0 2px;font-size:14px;font-weight:700;color:var(--asbdc-navy)}
   .item .meta{font-size:12px;color:#5a6678}
   .item .tag{display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:#fff;background:var(--asbdc-navy);border-radius:4px;padding:1px 5px;margin-left:6px;vertical-align:1px}
+  .item .dist{float:right;font-size:11px;font-weight:700;color:var(--asbdc-blue)}
+  .zip-note{padding:8px 16px;font-size:12.5px;color:#3a4658;background:#eef4fb;border-bottom:1px solid var(--line)}
+  .zip-note b{color:var(--asbdc-navy)}
+  .zip-pin{filter:drop-shadow(0 1px 2px rgba(2,45,97,.4))}
 
   /* ---- Map ---- */
   #map{flex:1;min-height:0;background:#aadaff}
@@ -138,8 +142,8 @@
           <select id="stateSel"><option value="">All states &amp; territories</option></select>
         </div>
         <div class="field">
-          <label for="search">Search center or city</label>
-          <input type="search" id="search" placeholder="e.g. Lexington, Cal Poly, Tuscaloosa…" autocomplete="off">
+          <label for="search">Search by ZIP, center, or city</label>
+          <input type="search" id="search" placeholder="e.g. 40508, Lexington, Cal Poly…" autocomplete="off">
         </div>
         <div class="legend">
           <span><span class="dot lead"></span>Lead / state office</span>
@@ -152,6 +156,7 @@
         </label>
       </div>
       <div class="result-meta"><b id="visCount">0</b> service centers shown<span id="otNote"></span></div>
+      <div class="zip-note" id="zipNote" style="display:none"></div>
       <div class="list" id="list"></div>
     </aside>
     <div id="map"></div>
@@ -177,7 +182,7 @@ function typeOf(c){
   const n=c.name||'';
   if(c.is_lead||LEAD_RE.test(n)) return 'lead';
   if(TERRITORIES.has(c.state)) return 'service';   // island SBDCs aren't circuit-rider
-  if(!(c.street||'').trim()) return 'outreach';
+  if(/Service Center/i.test(n)) return 'service';  // self-identified staffed center
   if(PARTNER_RE.test(n)) return 'outreach';
   if(COUNTY_RE.test(n)&&!MAIN_RE.test(n)) return 'outreach';
   return 'service';
@@ -225,6 +230,31 @@ const esc=s=>(s||'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"
 function tel(p){return (p||'').replace(/[^0-9]/g,'');}
 function webLabel(u){return (u||'').replace(/^https?:\/\//,'').replace(/\/$/,'');}
 
+// ---- ZIP "nearest service center" search ----
+let ZIPS=null, zipState=null, zipMarker=null;
+const NEAREST_N=8;
+function loadZips(){ return ZIPS ? Promise.resolve(ZIPS)
+  : fetch('zip-centroids.json',{cache:'force-cache'}).then(r=>r.json()).then(z=>(ZIPS=z)); }
+function miBetween(aLat,aLng,bLat,bLng){       // haversine, miles
+  const R=3958.8, t=Math.PI/180;
+  const dLat=(bLat-aLat)*t, dLng=(bLng-aLng)*t;
+  const x=Math.sin(dLat/2)**2 + Math.cos(aLat*t)*Math.cos(bLat*t)*Math.sin(dLng/2)**2;
+  return R*2*Math.asin(Math.sqrt(x));
+}
+function zipCentroid(zip,zips){
+  if(zips[zip]) return {pt:zips[zip],exact:true};
+  const p=zip.slice(0,3); let la=0,lo=0,n=0;     // fall back to 3-digit-prefix area
+  for(const k in zips){ if(k.slice(0,3)===p){la+=zips[k][0];lo+=zips[k][1];n++;} }
+  return n ? {pt:[la/n,lo/n],exact:false} : null;
+}
+function zipPin(){
+  return L.divIcon({className:'zip-pin',
+    html:`<svg width="30" height="30" viewBox="0 0 30 30" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="15" cy="15" r="9" fill="${BRAND.blue}" stroke="#fff" stroke-width="3"/>
+      <circle cx="15" cy="15" r="3" fill="#fff"/></svg>`,
+    iconSize:[30,30],iconAnchor:[15,15],popupAnchor:[0,-14]});
+}
+
 function popupHtml(c){
   const addr=[c.street,[c.city,c.state].filter(Boolean).join(', ')+' '+(c.zip||'')]
     .filter(s=>s&&s.trim()).join('<br>');
@@ -260,6 +290,7 @@ const visCount=document.getElementById('visCount');
 const otNote=document.getElementById('otNote');
 const showOutreach=document.getElementById('showOutreach');
 const resultMeta=document.querySelector('.result-meta');
+const zipNote=document.getElementById('zipNote');
 
 const TAG={lead:'Lead',outreach:'Outreach'};
 function currentFilter(){
@@ -273,7 +304,14 @@ function currentFilter(){
   });
 }
 
+function clearZip(){
+  if(zipMarker){ map.removeLayer(zipMarker); zipMarker=null; }
+  zipNote.style.display='none';
+}
+
 function render(){
+  if(zipState){ renderZip(); return; }
+  clearZip();
   const vis=currentFilter();
   cluster.clearLayers();
   cluster.addLayers(vis);
@@ -306,6 +344,53 @@ function render(){
   }
 }
 
+function renderZip(){
+  clearZip();
+  const zs=zipState;
+  resultMeta.style.display='none';
+  zipNote.style.display='';
+  cluster.clearLayers();
+  listEl.innerHTML='';
+  if(zs.notFound){
+    zipNote.innerHTML=`No location found for ZIP <b>${esc(zs.zip)}</b>. Try a nearby ZIP code.`;
+    return;
+  }
+  zipNote.innerHTML=`Nearest service centers to <b>${esc(zs.zip)}</b>${zs.exact?'':' <span style="color:#8893a4">(approx. area)</span>'}`;
+  cluster.addLayers(zs.ranked.map(r=>r.m));
+  zipMarker=L.marker(zs.pt,{icon:zipPin(),zIndexOffset:1000})
+    .addTo(map).bindPopup(`<div class="pop"><h3>ZIP ${esc(zs.zip)}</h3></div>`);
+  zs.ranked.forEach(r=>{
+    const c=r.m._c, t=c._t;
+    const tag=TAG[t]?`<span class="tag ${t==='outreach'?'ot':''}">${TAG[t]}</span>`:'';
+    const mi=r.dist<10?r.dist.toFixed(1):Math.round(r.dist);
+    const div=document.createElement('div'); div.className='item '+t;
+    div.innerHTML=`<h3><span class="dist">${mi} mi</span>${esc(c.name)}${tag}</h3>
+      <div class="meta">${esc(c.city)}, ${esc(c.state)}${c.phone?' &middot; '+esc(c.phone):''}</div>`;
+    div.onclick=()=>{ map.setView([c.lat,c.lng],13,{animate:true}); cluster.zoomToShowLayer(r.m,()=>r.m.openPopup()); };
+    listEl.appendChild(div);
+  });
+  const grp=L.featureGroup(zs.ranked.map(r=>r.m).concat(zipMarker));
+  try{map.fitBounds(grp.getBounds().pad(0.25),{maxZoom:11});}catch(e){}
+}
+
+function onSearch(){
+  const q=searchBox.value.trim();
+  if(/^\d{5}$/.test(q)){
+    if(stateSel.value) stateSel.value='';     // ZIP search is national
+    loadZips().then(zips=>{
+      if(searchBox.value.trim()!==q) return;  // ignore stale async result
+      const c=zipCentroid(q,zips);
+      if(!c){ zipState={zip:q,notFound:true}; render(); return; }
+      const centers=markers.filter(m=>m._c._t!=='outreach');   // service centers only
+      const ranked=centers.map(m=>({m,dist:miBetween(c.pt[0],c.pt[1],m._c.lat,m._c.lng)}))
+                          .sort((a,b)=>a.dist-b.dist).slice(0,NEAREST_N);
+      zipState={zip:q,pt:c.pt,exact:c.exact,ranked}; render();
+    }).catch(()=>{ zipState={zip:q,notFound:true}; render(); });
+  } else {
+    zipState=null; render();
+  }
+}
+
 fetch('data.json',{cache:'no-cache'}).then(r=>r.json()).then(rows=>{
   DATA=rows.filter(c=>typeof c.lat==='number'&&typeof c.lng==='number');
   DATA.forEach(c=>c._t=typeOf(c));
@@ -327,8 +412,8 @@ fetch('data.json',{cache:'no-cache'}).then(r=>r.json()).then(rows=>{
   console.error(e);
 });
 
-stateSel.addEventListener('change',()=>{searchBox.value='';render();if(!stateSel.value)map.setView([39.5,-98.35],4);});
-searchBox.addEventListener('input',()=>render());
+stateSel.addEventListener('change',()=>{searchBox.value='';zipState=null;render();if(!stateSel.value)map.setView([39.5,-98.35],4);});
+searchBox.addEventListener('input',onSearch);
 showOutreach.addEventListener('change',()=>render());
 window.addEventListener('resize',()=>map.invalidateSize());
 </script>

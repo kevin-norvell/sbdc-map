@@ -5,6 +5,10 @@
 __pycache__/
 *.pyc
 
+# Raw Census ZCTA gazetteer download (regenerable: scripts/build_zips.py rebuilds zip-centroids.json)
+data/gaz_zcta/
+data/gaz_zcta.zip
+
 # Raw harvested pages & one-off exploratory fetches (regenerable: scripts/harvest.py)
 data/states/
 data/*.html
