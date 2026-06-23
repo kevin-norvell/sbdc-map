@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Raw harvested pages & one-off exploratory fetches (regenerable: scripts/harvest.py)
+data/states/
+data/*.html
+data/*.csv
+data/*.out
+data/*.mjs
+data/cj.txt
+data/nom.json
+data/one.json
+data/offices.json
+data/jsonapi.json
+data/ckan*.json
+data/dg*.json
+data/wb.json
+
+# Pipeline intermediates (regenerable: reparse.py -> merge_enrich.py -> geocode.py)
+data/centers_raw.json
+data/centers_dedup.json
+data/centers_merged.json
+data/centers_geo.json
+
+# Kept on purpose: data/enrich/*.json (curated source), data/geocache.json (geocode cache),
+# data.json (built artifact the site serves)

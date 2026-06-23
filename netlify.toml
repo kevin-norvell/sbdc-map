@@ -1,0 +1,10 @@
+# America's SBDC National Center Locator — Netlify config
+# Static site: no build step. Publish the folder that holds index.html, data.json, assets/.
+[build]
+  publish = "."
+  command = ""
+
+[[headers]]
+  for = "/data.json"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"
